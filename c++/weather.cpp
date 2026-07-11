@@ -38,10 +38,37 @@
 #endif
 
 // ============================================================
+// 跨平台 UTF-8 输出
+// Linux/Mac: 直接 cout
+// Windows:   WriteConsoleW 绕过编码问题
+// ============================================================
+
+#ifdef _WIN32
+static void print_u8(const std::string &s) {
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode;
+    // 真实控制台用 WriteConsoleW（绕开代码页问题）
+    // 管道/文件重定向时退回到 cout
+    if (h && h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode)) {
+        int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(),
+                                      nullptr, 0);
+        std::wstring w(len, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(),
+                            &w[0], len);
+        DWORD written;
+        WriteConsoleW(h, w.data(), (DWORD)w.size(), &written, nullptr);
+    } else {
+        std::cout << s;
+    }
+}
+#else
+static void print_u8(const std::string &s) { std::cout << s; }
+#endif
+
+// ============================================================
 // 工具函数
 // ============================================================
 
-// URL 编码（处理中文等非 ASCII 字符）
 static std::string url_encode(const std::string &value) {
     std::ostringstream escaped;
     escaped << std::hex << std::uppercase;
@@ -55,7 +82,6 @@ static std::string url_encode(const std::string &value) {
     return escaped.str();
 }
 
-// 去除字符串首尾空白
 static std::string trim(const std::string &s) {
     size_t start = s.find_first_not_of(" \t\r\n");
     if (start == std::string::npos) return "";
@@ -87,42 +113,87 @@ static std::string fetch_json(const std::string &url) {
 }
 
 // ============================================================
-// JSON 简易提取（不依赖第三方库，只针对已知结构）
+// JSON 简易提取
 // ============================================================
 
-// 从 JSON 中提取指定 key 的字符串值: "key": "value"
-// 所有数值在 wttr.in 响应中也带引号，所以统一用这个函数
 static std::string json_get_string(const std::string &json, const std::string &key) {
     std::regex pattern("\"" + key + "\"\\s*:\\s*\"([^\"]*)\"");
     std::smatch match;
-    if (std::regex_search(json, match, pattern)) {
+    if (std::regex_search(json, match, pattern))
         return match[1];
-    }
     return "";
 }
 
-// 从 JSON 中提取指定 key 的整数字符串值
 static std::string json_get_int(const std::string &json, const std::string &key) {
     std::string val = json_get_string(json, key);
-    // 也支持不带引号的纯数字
     if (val.empty()) {
         std::regex pattern("\"" + key + "\"\\s*:\\s*(\\d+)");
         std::smatch match;
-        if (std::regex_search(json, match, pattern)) {
+        if (std::regex_search(json, match, pattern))
             val = match[1];
-        }
     }
     return val;
 }
 
-// 提取嵌套 weatherDesc 中的 value（第一个匹配）
 static std::string json_get_desc(const std::string &json) {
-    std::regex pattern("\"weatherDesc\"\\s*:\\s*\\[\\s*\\{\\s*\"value\"\\s*:\\s*\"([^\"]*)\"");
+    std::regex pattern(
+        "\"weatherDesc\"\\s*:\\s*\\[\\s*\\{\\s*\"value\"\\s*:\\s*\"([^\"]*)\"");
     std::smatch match;
-    if (std::regex_search(json, match, pattern)) {
+    if (std::regex_search(json, match, pattern))
         return match[1];
-    }
     return "";
+}
+
+// ============================================================
+// 天气描述中英文翻译表
+// ============================================================
+
+static std::string translate_desc(const std::string &en) {
+    static const char *table[][2] = {
+        { "Moderate or heavy rain with thunder", u8"\u96f7\u66b4\u5927\u96e8" },
+        { "Moderate or heavy rain shower",       u8"\u4e2d\u5230\u5927\u9635\u96e8" },
+        { "Moderate or heavy freezing rain",     u8"\u4e2d\u5230\u5927\u51bb\u96e8" },
+        { "Moderate or heavy sleet",             u8"\u4e2d\u5230\u5927\u51b0\u96f9" },
+        { "Patchy light rain with thunder",      u8"\u96f7\u9635\u96e8" },
+        { "Patchy light drizzle",                u8"\u96f6\u661f\u6bdb\u6bdb\u96e8" },
+        { "Patchy light rain",                   u8"\u96f6\u661f\u5c0f\u96e8" },
+        { "Patchy moderate snow",                u8"\u96f6\u661f\u4e2d\u96ea" },
+        { "Patchy heavy snow",                   u8"\u96f6\u661f\u5927\u96ea" },
+        { "Patchy rain possible",                u8"\u53ef\u80fd\u6709\u96f6\u661f\u96e8" },
+        { "Patchy rain nearby",                  u8"\u9644\u8fd1\u6709\u96e8" },
+        { "Torrential rain shower",              u8"\u7279\u5927\u9635\u96e8" },
+        { "Thundery outbreaks possible",         u8"\u53ef\u80fd\u6709\u96f7\u66b4" },
+        { "Light rain shower",                   u8"\u5c0f\u9635\u96e8" },
+        { "Light freezing rain",                 u8"\u51bb\u96e8" },
+        { "Light drizzle",                       u8"\u6bdb\u6bdb\u96e8" },
+        { "Light rain with thunder",             u8"\u96f7\u9635\u96e8" },
+        { "Moderate rain with thunder",          u8"\u96f7\u9635\u96e8\u4e2d\u96e8" },
+        { "Heavy rain with thunder",             u8"\u96f7\u9635\u96e8\u5927\u96e8" },
+        { "Moderate rain at times",              u8"\u65f6\u6709\u4e2d\u96e8" },
+        { "Heavy rain at times",                 u8"\u65f6\u6709\u5927\u96e8" },
+        { "Moderate rain",                       u8"\u4e2d\u96e8" },
+        { "Heavy rain",                          u8"\u5927\u96e8" },
+        { "Light rain",                          u8"\u5c0f\u96e8" },
+        { "Partly cloudy",                       u8"\u591a\u4e91" },
+        { "Freezing fog",                        u8"\u51bb\u96fe" },
+        { "Light snow",                          u8"\u5c0f\u96ea" },
+        { "Moderate snow",                       u8"\u4e2d\u96ea" },
+        { "Heavy snow",                          u8"\u5927\u96ea" },
+        { "Sunny",                               u8"\u6674" },
+        { "Clear ",                              u8"\u6674 " },
+        { "Clear",                               u8"\u6674" },
+        { "Cloudy",                              u8"\u591a\u4e91" },
+        { "Overcast",                            u8"\u9634" },
+        { "Mist",                                u8"\u8584\u96fe" },
+        { "Fog",                                 u8"\u96fe" },
+        { "Hail",                                u8"\u51b0\u96f9" },
+    };
+    for (auto &pair : table)
+        if (en.find(pair[0]) != std::string::npos)
+            return pair[1];
+    for (unsigned char c : en)
+        if (c >= 0x80) return en;
+    return en;
 }
 
 // ============================================================
@@ -136,38 +207,29 @@ struct DayForecast {
     std::string desc;
 };
 
-// Helper: 在 JSON 中找第 N 个 key 的字符串值
-static std::string find_nth_value(const std::string &json, const std::string &key, int index) {
+static std::string find_nth_value(const std::string &json,
+                                  const std::string &key, int index) {
     size_t pos = 0;
     for (int i = 0; i <= index; i++) {
-        // 找到 "key":  (可能之后有空格)
         std::string search = "\"" + key + "\":";
         size_t found = json.find(search, pos);
         if (found == std::string::npos) return "";
-        // 跳过整个 "key": 部分
         pos = found + search.length();
-        // 跳过可能的空格
-        while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
-        // 下一个字符应该是 "
+        while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t'))
+            pos++;
         if (pos >= json.length() || json[pos] != '"') return "";
-        pos++; // 跳过 "
+        pos++;
     }
-    // 读取引号内内容
     size_t end = json.find('"', pos);
-    if (end == std::string::npos) return "";
-    return json.substr(pos, end - pos);
+    return (end == std::string::npos) ? "" : json.substr(pos, end - pos);
 }
 
-// 从完整的 JSON 中提取第 N 天的预报数据
-// day_index: 0=今天, 1=明天, 2=后天
 static DayForecast extract_forecast(const std::string &json, int day_index) {
     DayForecast day;
     day.date     = find_nth_value(json, "date", day_index);
     day.max_temp = find_nth_value(json, "maxtempC", day_index);
     day.min_temp = find_nth_value(json, "mintempC", day_index);
 
-    // 对于 description，需要在当天范围内搜索第一个 weatherDesc
-    // 先定位到该天的 date 所在位置，然后取到下一个 date 或结尾
     {
         std::string dm = "\"date\":";
         size_t start = 0;
@@ -177,33 +239,38 @@ static DayForecast extract_forecast(const std::string &json, int day_index) {
             start = f + dm.length();
         }
         if (start > 0) {
-            // 找到该 date 后面的第一个 weatherDesc
             size_t seg_end = json.find(dm, start);
             if (seg_end == std::string::npos) seg_end = json.length();
-            // 从 start-1 到 seg_end
             size_t search_from = (start > 10) ? start - 10 : 0;
-            std::string seg = json.substr(search_from, seg_end - search_from);
-            day.desc = json_get_desc(seg);
+            day.desc = json_get_desc(
+                json.substr(search_from, seg_end - search_from));
         }
     }
-
     return day;
 }
 
 // ============================================================
-// 显示天气信息
+// 输出构建（先用 UTF-8 拼装，再一次性输出）
 // ============================================================
 
 static void display_weather(const std::string &city, const std::string &json) {
+    std::ostringstream out;  // 全部用 UTF-8 拼装
+
     if (json.empty()) {
-        std::cerr << "\n  [错误] 无法连接到天气服务，请检查网络连接。\n\n";
+        out << u8"\n  [\u9519\u8bef] \u65e0\u6cd5\u8fde\u63a5\u5230"
+               u8"\u5929\u6c14\u670d\u52a1\uff0c\u8bf7\u68c0\u67e5"
+               u8"\u7f51\u7edc\u8fde\u63a5\u3002\n\n";
+        print_u8(out.str());
         return;
     }
 
-    // 检查是否有 current_condition
     if (json.find("current_condition") == std::string::npos) {
-        std::cerr << "\n  [错误] 未找到城市 \"" << city << "\" 的天气信息。\n"
-                  << "  请检查城市名是否正确（建议使用拼音或英文名）。\n\n";
+        out << u8"\n  [\u9519\u8bef] \u672a\u627e\u5230\u57ce\u5e02 \""
+            << city
+            << u8"\" \u7684\u5929\u6c14\u4fe1\u606f\u3002\n"
+               u8"  \u8bf7\u68c0\u67e5\u57ce\u5e02\u540d\u662f\u5426\u6b63\u786e"
+               u8"\uff08\u5efa\u8bae\u4f7f\u7528\u62fc\u97f3\u6216\u82f1\u6587\u540d\uff09\u3002\n\n";
+        print_u8(out.str());
         return;
     }
 
@@ -219,59 +286,55 @@ static void display_weather(const std::string &city, const std::string &json) {
 
     // --- 解析未来3天预报 ---
     DayForecast days[3];
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 3; i++)
         days[i] = extract_forecast(json, i);
-    }
 
-    // ============================================================
-    // --- 输出 ---
-    // ============================================================
+    // --- 拼装输出 ---
+    out << u8"\n"
+           u8"  +------------------------------------------+\n"
+           u8"  |            \u5b9e\u65f6\u5929\u6c14\u67e5\u8be2                    |\n"
+           u8"  +------------------------------------------+\n"
+           u8"\n"
+           u8"  \u57ce\u5e02: " << city << "\n";
 
-    // 标题
-    std::cout << "\n";
-    std::cout << "  +------------------------------------------+\n";
-    std::cout << "  |           实时天气查询                    |\n";
-    std::cout << "  +------------------------------------------+\n";
-    std::cout << "\n";
-    std::cout << "  城市: " << city << "\n";
-    if (!desc.empty()) {
-        std::cout << "  天气: " << desc << "\n";
-    }
-    std::cout << "\n";
+    if (!desc.empty())
+        out << u8"  \u5929\u6c14: " << translate_desc(desc) << "\n";
 
-    // 实时数据
-    std::cout << "  --- 实时天气 ---\n";
-    if (!temp.empty())       std::cout << "  温度    : " << temp << " C\n";
-    if (!feels.empty())      std::cout << "  体感温度: " << feels << " C\n";
-    if (!humidity.empty())   std::cout << "  湿度    : " << humidity << "%\n";
-    if (!wind_speed.empty()) std::cout << "  风速    : " << wind_speed << " km/h " << wind_dir << "\n";
-    if (!visibility.empty()) std::cout << "  能见度  : " << visibility << " km\n";
-    if (!uv_index.empty())   std::cout << "  紫外线  : " << uv_index << "\n";
-    std::cout << "\n";
+    out << u8"\n"
+           u8"  --- \u5b9e\u65f6\u5929\u6c14 ---\n";
+    if (!temp.empty())
+        out << u8"  \u6e29\u5ea6    : " << temp << " C\n";
+    if (!feels.empty())
+        out << u8"  \u4f53\u611f\u6e29\u5ea6: " << feels << " C\n";
+    if (!humidity.empty())
+        out << u8"  \u6e7f\u5ea6    : " << humidity << "%\n";
+    if (!wind_speed.empty())
+        out << u8"  \u98ce\u901f    : " << wind_speed << " km/h " << wind_dir << "\n";
+    if (!visibility.empty())
+        out << u8"  \u80fd\u89c1\u5ea6  : " << visibility << " km\n";
+    if (!uv_index.empty())
+        out << u8"  \u7d2b\u5916\u7ebf  : " << uv_index << "\n";
 
-    // 未来3天预报
-    std::cout << "  --- 未来 3 天预报 ---\n";
+    out << u8"\n"
+           u8"  --- \u672a\u6765 3 \u5929\u9884\u62a5 ---\n";
     for (int i = 0; i < 3; i++) {
         if (days[i].date.empty()) continue;
-
-        // 只显示 MM-DD
-        std::string date_short = (days[i].date.length() >= 10)
-            ? days[i].date.substr(5) : days[i].date;
-
-        std::cout << "  " << (i + 1) << ". " << date_short;
-        if (!days[i].min_temp.empty() && !days[i].max_temp.empty()) {
-            std::cout << "  " << days[i].min_temp << "~" << days[i].max_temp << " C";
-        }
-        if (!days[i].desc.empty()) {
-            std::cout << "  " << days[i].desc;
-        }
-        std::cout << "\n";
+        std::string d = (days[i].date.length() >= 10)
+                            ? days[i].date.substr(5) : days[i].date;
+        out << "  " << (i + 1) << ". " << d;
+        if (!days[i].min_temp.empty() && !days[i].max_temp.empty())
+            out << "  " << days[i].min_temp << "~" << days[i].max_temp << " C";
+        if (!days[i].desc.empty())
+            out << "  " << translate_desc(days[i].desc);
+        out << "\n";
     }
-    std::cout << "\n";
 
-    std::cout << "  ---\n";
-    std::cout << "  数据: wttr.in\n";
-    std::cout << "\n";
+    out << u8"\n"
+           u8"  ---\n"
+           u8"  \u6570\u636e: wttr.in\n"
+           u8"\n";
+
+    print_u8(out.str());
 }
 
 // ============================================================
@@ -279,22 +342,27 @@ static void display_weather(const std::string &city, const std::string &json) {
 // ============================================================
 
 static void print_help(const char *prog_name) {
-    std::cout << "\n";
-    std::cout << "  天气查询工具\n";
-    std::cout << "\n";
-    std::cout << "  用法: " << prog_name << " [城市名]\n";
-    std::cout << "\n";
-    std::cout << "  参数:\n";
-    std::cout << "    城市名    要查询的城市（支持拼音、英文）\n";
-    std::cout << "             不指定则默认查询北京\n";
-    std::cout << "    -h        显示本帮助信息\n";
-    std::cout << "\n";
-    std::cout << "  示例:\n";
-    std::cout << "    " << prog_name << " beijing\n";
-    std::cout << "    " << prog_name << " shanghai\n";
-    std::cout << "    " << prog_name << " \"New York\"\n";
-    std::cout << "    " << prog_name << " london\n";
-    std::cout << "\n";
+    std::ostringstream out;
+    out << u8"\n"
+           u8"  \u5929\u6c14\u67e5\u8be2\u5de5\u5177\n"
+           u8"\n"
+           u8"  \u7528\u6cd5: " << prog_name
+        << u8" [\u57ce\u5e02\u540d]\n"
+           u8"\n"
+           u8"  \u53c2\u6570:\n"
+           u8"    \u57ce\u5e02\u540d    "
+           u8"\u8981\u67e5\u8be2\u7684\u57ce\u5e02\uff08\u652f\u6301\u62fc\u97f3\u3001\u82f1\u6587\uff09\n"
+           u8"             "
+           u8"\u4e0d\u6307\u5b9a\u5219\u9ed8\u8ba4\u67e5\u8be2\u5317\u4eac\n"
+           u8"    -h        \u663e\u793a\u672c\u5e2e\u52a9\u4fe1\u606f\n"
+           u8"\n"
+           u8"  \u793a\u4f8b:\n"
+           u8"    " << prog_name << " beijing\n"
+        << u8"    " << prog_name << " shanghai\n"
+        << u8"    " << prog_name << " \"New York\"\n"
+        << u8"    " << prog_name << " london\n"
+        << u8"\n";
+    print_u8(out.str());
 }
 
 // ============================================================
@@ -302,11 +370,9 @@ static void print_help(const char *prog_name) {
 // ============================================================
 
 int main(int argc, char *argv[]) {
-    // 设置本地化以支持中文输出
     std::setlocale(LC_ALL, "");
 
 #ifdef _WIN32
-    // Windows 下设置控制台 UTF-8 编码以支持中文
     SetConsoleOutputCP(CP_UTF8);
 #endif
 
@@ -321,12 +387,10 @@ int main(int argc, char *argv[]) {
     }
 
     city = trim(city);
-    if (city.empty()) {
+    if (city.empty())
         city = "beijing";
-    }
 
-    // 构建 API URL
-    std::string url = "https://wttr.in/" + url_encode(city) + "?format=j1";
+    std::string url = "https://wttr.in/" + url_encode(city) + "?format=j1&lang=zh";
     std::string json = fetch_json(url);
 
     display_weather(city, json);

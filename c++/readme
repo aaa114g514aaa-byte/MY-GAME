@@ -1,0 +1,9 @@
+## 🌤️ C++ 天气查询工具 使用说明
+
+### 下载
+1. 前往 [Releases](https://github.com/aaa114g514aaa-byte/MY-GAME/releases) 页面
+2. 下载 `weather.exe`（已预编译，无需安装任何东西）
+
+### 运行
+1. 双击 `weather.exe` → 自动查询 **北京** 天气（默认）
+2. 或打开终端（CMD/PowerShell），在 `weather.exe` 所在目录输入：
