@@ -468,7 +468,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 // ============================================================
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow) {
-    HICON hIcon = LoadIcon(nullptr, IDI_INFORMATION);
+    HICON hIcon = LoadIcon(hInst, MAKEINTRESOURCE(1));
 
     WNDCLASS wc = {};
     wc.lpfnWndProc   = WndProc;
